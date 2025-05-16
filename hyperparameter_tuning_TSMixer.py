@@ -12,7 +12,7 @@ from pytorch_lightning.callbacks import EarlyStopping
 
 from darts import TimeSeries
 from darts.dataprocessing.transformers import Scaler
-from darts.models import NHiTSModel
+from darts.models import TSMixerModel
 from darts.utils.likelihood_models import QuantileRegression
 
 # Data processing
@@ -30,13 +30,12 @@ from optuna.integration import PyTorchLightningPruningCallback
 # define objective function
 def objective(trial):
     # select input and output chunk lengths
-    in_len = trial.suggest_int("in_len", 100, 200)
+    in_len = trial.suggest_int("in_len", 150, 300)
     out_len = 20
     # Other hyperparameters
-    num_stacks = trial.suggest_int("num_stacks", 3, 5)
-    num_blocks = trial.suggest_int("num_blocks", 1, 2)
-    num_layers = trial.suggest_int("num_layers", 2, 3)
-    layer_widths = trial.suggest_int("layer_widths", 128, 256)
+    hidden_size = trial.suggest_int("hidden_size", 64, 128)
+    ff_size = trial.suggest_int("ff_size", 48, 96)
+    num_blocks = trial.suggest_int("num_blocks", 2, 3)
     dropout = trial.suggest_float("dropout", 0.0, 0.2)
     lr = trial.suggest_float("lr", 1e-6, 1e-2, log=True)
     activation = trial.suggest_categorical("activation", ["ReLU", "LeakyReLU", "Tanh", "RReLU"])
@@ -48,11 +47,11 @@ def objective(trial):
         trial.report(float('inf'), step=0) # Report a high value
         if optuna.trial.TrialState.PRUNED != trial.state: # Check if not already pruned
              raise optuna.exceptions.TrialPruned() # Prune if infeasible due to data length
-        return float('inf') # Should be caught by pruner or returned if not
+        return float('inf') # pruner or returned if not
 
     # Throughout training we'll monitor the validation loss for both pruning and early stopping
     pruner = PyTorchLightningPruningCallback(trial, monitor="val_loss")
-    early_stopper = EarlyStopping("val_loss", min_delta=0.001, patience=15, verbose=True)
+    early_stopper = EarlyStopping("val_loss", min_delta=0.001, patience=20, verbose=True)
     callbacks = [pruner, early_stopper]
 
     pl_trainer_kwargs = {
@@ -64,16 +63,15 @@ def objective(trial):
     torch.manual_seed(42)
 
     # build the TCN model
-    model = NHiTSModel(
-        input_chunk_length=in_len,
-        output_chunk_length=out_len,
-        num_stacks = num_stacks,
-        num_layers = num_layers,
-        layer_widths = layer_widths,
-        batch_size=32,
-        num_blocks=num_blocks,
+    model = TSMixerModel(
+        input_chunk_length = in_len,
+        output_chunk_length = out_len,
+        hidden_size = hidden_size,
+        ff_size = ff_size,
+        num_blocks= num_blocks,
+        batch_size=16,
         activation = activation,
-        n_epochs=500,
+        n_epochs=250,
         nr_epochs_val_period=1,
         dropout=dropout,
         optimizer_kwargs={"lr": lr},
@@ -90,9 +88,6 @@ def objective(trial):
                 past_covariates=train_past_covariates_for_tuning, 
                 val_past_covariates=val_past_covariates_for_tuning,
                 verbose=False)
-
-        # reload best model over course of training
-        model = NHiTSModel.load_from_checkpoint("NHits_OptunaTrial", best=True)
 
         # --- Corrected Evaluation Section ---
         # Predict on the entire validation set to get a score for Optuna
@@ -121,15 +116,12 @@ def objective(trial):
         pred_continuous_eval = pred_continuous_val[:min_eval_len]
 
         # Calculate ROC AUC score
-        # Optuna minimizes, so return 1.0 - roc_auc
         score = roc_auc_score(actual_vals_eval, pred_continuous_eval)
         objective_value = 1.0 - score
 
         if np.isnan(objective_value) or np.isinf(objective_value):
             print(f"Warning: Objective value is NaN/inf for trial {trial.number}. ROC AUC: {score}")
-            # This can happen if all predictions are the same, or only one class in actuals_vals_eval
-            # for the specific validation slice used.
-            return float('inf') # Or a high constant like 2.0 if 1-AUC is used.
+            return float('inf') 
 
         return objective_value
 
@@ -289,5 +281,5 @@ if __name__ == "__main__":
 
     # --- Start Hyperparameter Tuning ---
     study = optuna.create_study(direction="minimize")
-    study.optimize(objective, n_trials=250, callbacks=[print_callback])
+    study.optimize(objective, n_trials=300, callbacks=[print_callback])
   
