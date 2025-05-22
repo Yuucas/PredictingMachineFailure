@@ -73,11 +73,9 @@ if __name__ == "__main__":
     dataset['Type'] = LabelEncoder().fit_transform(dataset['Type'])
 
     # --- Feature Elimination ---
-    # initialize linear regresion estimator
     rfr_model = RandomForestRegressor()
 
     # initialize feature selector
-    # neg_mean_squared_error
     rfe = RecursiveFeatureElimination(estimator=rfr_model, scoring="r2", cv=3)
 
     # Prepare dataset
@@ -88,7 +86,6 @@ if __name__ == "__main__":
     print("Dataset After Elimination: \n", x_transformed.head(5))
 
     # --- Data Preparation for Fine Tuning ---
-    # Define which columns are your main features and which are covariates
     column_names_list = x_transformed.columns.tolist()
 
     covariate_cols = [col for col in column_names_list if col == 'Type']
@@ -98,12 +95,11 @@ if __name__ == "__main__":
     main_ts = TimeSeries.from_dataframe(x_transformed, value_cols=main_feature_cols)
     covariates_ts = TimeSeries.from_dataframe(x_transformed, value_cols=covariate_cols)
 
-    # The 'Target' column (0 or 1) is what we want to predict.
-    target_ts = TimeSeries.from_series(y) # y is dataset["Target"]
+    target_ts = TimeSeries.from_series(y)
 
     # Define split proportions
     train_frac = 0.7  # 70% for training
-    val_frac = 0.15   # 15% for validation
+    val_frac = 0.15   # 15% for validation / test
 
     # Calculate split points
     temp_main_ts, test_main_ts = main_ts.split_before(1.0 - val_frac) 
@@ -133,7 +129,7 @@ if __name__ == "__main__":
 
     # --- Scaling ---
     scaler = Scaler(StandardScaler())
-    scaler.fit(train_main_ts) # Fit ONLY on training main features
+    scaler.fit(train_main_ts)
     train_main_ts_scaled = scaler.transform(train_main_ts)
     val_main_ts_scaled = scaler.transform(val_main_ts)
     test_main_ts_scaled = scaler.transform(test_main_ts)
@@ -143,13 +139,11 @@ if __name__ == "__main__":
     val_past_covariates_for_fit = val_main_ts_scaled.stack(val_covariates_ts) if val_covariates_ts else val_main_ts_scaled
 
     # --- Prepare Full Past Covariates for Prediction on Test Set ---
-    # Scale the entire original main_ts (before any splits) using the fitted scaler
     full_main_ts_original_scaled = scaler.transform(main_ts)
     full_past_covariates_for_prediction = full_main_ts_original_scaled.stack(covariates_ts) if covariates_ts else full_main_ts_original_scaled
 
-    
 
-    # Best parameters from Optuna (as you provided)
+    # Best parameters from Optuna
     best_hyperparams = {
         'input_chunk_length': 197,
         'output_chunk_length': 20,
@@ -171,10 +165,9 @@ if __name__ == "__main__":
         project=wandb_project_name,
         name=wandb_run_name,
         job_type="final-model-training"
-        # config will be updated later or can be passed here
     )
 
-    # Prepare final model parameters
+
     # --- Final Model Parameters ---
     final_model_params = {
         'output_chunk_length': best_hyperparams['output_chunk_length'], # Keep consistent with Optuna's out_len_model_config if applicable
@@ -227,8 +220,9 @@ if __name__ == "__main__":
         )
         print(f"\n--- Final {model_name} Model Training Complete ---")
 
+        # --- Save the Final Model ---
         final_model_save_path = os.path.join(final_model_params['work_dir'], final_model_params['model_name'], "final_best_model")
-        final_model.save(final_model_save_path) # Darts model save method
+        final_model.save(final_model_save_path)
         print(f"Final model explicitly saved to: {final_model_save_path}")
 
         # --- Log Model as W&B Artifact ---
@@ -273,7 +267,7 @@ if __name__ == "__main__":
                 roc_auc = roc_auc_score(actual_labels_eval, predicted_continuous_values[:min_len]) if len(np.unique(actual_labels_eval)) > 1 else 0.5
                 print(f"Accuracy: {accuracy:.4f}, ROC AUC: {roc_auc:.4f}")
 
-                wandb_logger.experiment.log({ # Use the logger's experiment object
+                wandb_logger.experiment.log({
                     "test_accuracy": accuracy,
                     "test_roc_auc": roc_auc,
                     "threshold": threshold
@@ -284,7 +278,8 @@ if __name__ == "__main__":
                 
                 print("\n--- Classification Report ---")
                 print(report)
-                # --- Robust Logging of Classification Report Metrics ---
+
+                # --- Logging of Classification Report Metrics ---
                 metrics_to_log = {}
 
                 # Log metrics for class 'Good' (No Failure)
@@ -333,10 +328,10 @@ if __name__ == "__main__":
                 wandb_logger.experiment.log({"confusion_matrix": wandb.Image(fig_cm)})
                 plt.close(fig_cm)
 
-                # ... (your actual vs predicted plot logging, ensure to use wandb_logger.experiment.log) ...
-                x_min_display, x_max_display = 9500, 9600# Adjusted range for example
+                # Plotting the actual vs predicted values
+                x_min_display, x_max_display = 9500, 9600
                 fig_preds, ax_preds = plt.subplots(figsize=(15, 7))
-                # ... (plotting code from your script) ...
+
                 time_index_full_test = test_target_ts.time_index
                 actual_labels_np = np.array(actual_labels_eval)
                 predicted_labels_np = np.array(predicted_labels_eval)
@@ -348,7 +343,7 @@ if __name__ == "__main__":
                     ax_preds.plot(time_index_display, predicted_labels_display, label='Predicted Failures', marker='x', linestyle='--', color='red', alpha=0.7, markersize=8)
                     ax_preds.set_title(f'Final {model_name}: Actual vs. Predicted (Index {x_min_display}-{x_max_display})')
                     ax_preds.set_xlabel('Time Step / Index'); ax_preds.set_ylabel('Failure (1) / No Failure (0)'); ax_preds.set_yticks([0, 1])
-                    ax_preds.set_xlim(x_min_display -1, x_max_display +1); ax_preds.legend(); ax_preds.grid(True, which='both', linestyle='--', linewidth=0.5)
+                    ax_preds.set_xlim(x_min_display -1, x_max_display +1); ax_preds.legend(); ax_preds.grid(False, which='both', linestyle='--', linewidth=0.5)
                     plt.tight_layout()
                     wandb_logger.experiment.log({"actual_vs_predicted_zoom": wandb.Image(fig_preds)})
                     plt.close(fig_preds)

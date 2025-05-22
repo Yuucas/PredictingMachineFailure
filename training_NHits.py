@@ -348,8 +348,7 @@ if __name__ == "__main__":
                     ax_preds.plot(time_index_display, predicted_labels_display, label='Predicted Failures', marker='x', linestyle='--', color='red', alpha=0.7, markersize=8)
                     ax_preds.set_title(f'Final N-HiTS: Actual vs. Predicted (Index {x_min_display}-{x_max_display})')
                     ax_preds.set_xlabel('Time Step / Index'); ax_preds.set_ylabel('Failure (1) / No Failure (0)'); ax_preds.set_yticks([0, 1])
-                    ax_preds.set_xlim(x_min_display -1, x_max_display +1); ax_preds.legend(); ax_preds.grid(True, which='both', linestyle='--', linewidth=0.5)
-                    plt.tight_layout()
+                    ax_preds.set_xlim(x_min_display -1, x_max_display +1); ax_preds.legend()
                     wandb_logger.experiment.log({"actual_vs_predicted_zoom": wandb.Image(fig_preds)})
                     plt.close(fig_preds)
 

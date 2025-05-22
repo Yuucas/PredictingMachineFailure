@@ -8,12 +8,10 @@ from feature_engine.selection import RecursiveFeatureElimination
 
 
 from darts import TimeSeries
-from darts.dataprocessing.transformers import Scaler
 from darts.models import XGBModel
 
 
 # Data processing
-from sklearn.preprocessing import MaxAbsScaler, MinMaxScaler, StandardScaler
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import LabelEncoder
 
@@ -39,12 +37,13 @@ Best params: {'lags': 54,
 '''
 
 
-OUTPUT_CHUNK_LENGTH = 20 # Predicting next step's failure status
+# Predicting next step's failure status
+OUTPUT_CHUNK_LENGTH = 20
 
-# define objective function
+# Define objective function
 def objective(trial):
     lags = trial.suggest_int("lags", 5, 60)
-    lags_past_covariates = trial.suggest_int("lags_past_covariates", 0, 60) # Allow 0 for no past covariate lags
+    lags_past_covariates = trial.suggest_int("lags_past_covariates", 0, 60) 
     output_chunk_length = OUTPUT_CHUNK_LENGTH # Predicting next step's failure status
 
     xgb_specific_params = {
@@ -60,12 +59,10 @@ def objective(trial):
         "early_stopping_rounds": trial.suggest_int("early_stopping_rounds", 10, 25)
     }
 
-    # Use the correctly prepared XGBoost-specific train/val splits:
-    # train_target_ts_for_xgb, val_target_ts_for_xgb,
-    # train_all_features_as_past_cov_xgb, val_all_features_as_past_cov_xgb
 
     min_series_len_needed = lags + output_chunk_length
     min_past_cov_len_needed = 0
+
     # Determine if past covariates with lags will be used
     use_past_covs_with_lags = train_all_features_as_past_cov_xgb is not None and lags_past_covariates > 0
 
@@ -91,7 +88,6 @@ def objective(trial):
             past_covariates=train_all_features_as_past_cov_xgb if use_past_covs_with_lags else None,
             val_series=val_target_ts_for_xgb,
             val_past_covariates=val_all_features_as_past_cov_xgb if use_past_covs_with_lags else None
-            # verbose=False # XGBoost can be chatty, Darts doesn't have a direct verbose here
         )
 
         predictions_val = model.predict(
@@ -109,20 +105,20 @@ def objective(trial):
         actual_vals_eval = actual_vals_val[:min_eval_len]
         pred_continuous_eval = pred_continuous_val[:min_eval_len]
 
-        if len(np.unique(actual_vals_eval)) < 2: return 1.0 # Worst score for 1-AUC if only one class
+        if len(np.unique(actual_vals_eval)) < 2: return 1.0 
 
         score = roc_auc_score(actual_vals_eval, pred_continuous_eval)
-        objective_value = 1.0 - score # Optuna minimizes
+        objective_value = 1.0 - score
 
         return objective_value if not (np.isnan(objective_value) or np.isinf(objective_value)) else float('inf')
 
-    except Exception as e: # Catch any exception during fit/predict
+    except Exception as e: 
         print(f"Optuna trial {trial.number} failed: {e}")
-        return float('inf') # Indicate failure for this trial
+        return float('inf')
 
 
 
-# for convenience, print some optimization trials information
+# Print some optimization trials information
 def print_callback(study, trial):
     print(f"Current value: {trial.value}, Current params: {trial.params}")
     print(f"Best value: {study.best_value}, Best params: {study.best_trial.params}")
@@ -164,11 +160,7 @@ if __name__ == "__main__":
     dataset['Type'] = LabelEncoder().fit_transform(dataset['Type'])
 
     # --- Feature Elimination ---
-    # initialize linear regresion estimator
     rfr_model = RandomForestRegressor()
-
-    # initialize feature selector
-    # neg_mean_squared_error
     rfe = RecursiveFeatureElimination(estimator=rfr_model, scoring="r2", cv=3)
 
     # Prepare dataset
@@ -179,7 +171,6 @@ if __name__ == "__main__":
     print("Dataset After Elimination: \n", x_transformed.head(5))
 
     # --- Data Preparation for Fine Tuning ---
-    # Define which columns are your main features and which are covariates
     column_names_list = x_transformed.columns.tolist()
 
     main_feature_cols = [col for col in column_names_list if col != 'Type']
@@ -188,13 +179,13 @@ if __name__ == "__main__":
     all_features_as_past_cov_ts_full = TimeSeries.from_dataframe(x_transformed, value_cols=main_feature_cols)
 
     # The 'Target' column (0 or 1) is what we want to predict.
-    target_ts_full = TimeSeries.from_series(y) # y is dataset["Target"]
+    target_ts_full = TimeSeries.from_series(y)
 
     # Define split proportions
     train_frac = 0.7  # 70% for training
-    val_frac = 0.15   # 15% for validation
+    val_frac = 0.15   # 15% for validation / 15% for test
 
-    temp_target_ts, test_target_ts_for_xgb = target_ts_full.split_before(train_frac + val_frac)
+    temp_target_ts, test_target_ts = target_ts_full.split_before(train_frac + val_frac)
     train_target_ts_for_xgb, val_target_ts_for_xgb = temp_target_ts.split_before(train_frac / (train_frac + val_frac))
 
     temp_all_features_ts, test_all_features_as_past_cov_xgb = all_features_as_past_cov_ts_full.split_before(train_frac + val_frac)
@@ -206,12 +197,9 @@ if __name__ == "__main__":
     print(f"\n--- Data Splitting for XGBModel Optuna ---")
     print(f"Train target (XGB): {len(train_target_ts_for_xgb)}")
     print(f"Val target (XGB): {len(val_target_ts_for_xgb)}")
-    print(f"Test target (XGB): {len(test_target_ts_for_xgb)}")
+    print(f"Test target (XGB): {len(test_target_ts)}")
     print(f"Train past_cov (XGB): {len(train_all_features_as_past_cov_xgb)}, Components: {train_all_features_as_past_cov_xgb.n_components if train_all_features_as_past_cov_xgb else 'None'}")
     print(f"Val past_cov (XGB): {len(val_all_features_as_past_cov_xgb)}, Components: {val_all_features_as_past_cov_xgb.n_components if val_all_features_as_past_cov_xgb else 'None'}")
-
-    # SCALING: XGBoost is generally robust to feature scaling.
-    # The features in x_transformed (and thus in *_all_features_as_past_cov_xgb) are used directly.
 
     # --- Start Optuna Hyperparameter Tuning for XGBModel ---
     print("\n--- Starting Optuna Hyperparameter Tuning for XGBModel ---")
@@ -232,19 +220,23 @@ if __name__ == "__main__":
 
     # Prepare final parameters
     final_model_darts_config_xgb = {
-        "lags": best_xgb_params.pop("lags"), # Remove from best_xgb_params to avoid duplicate kwargs if it's still there
+        "lags": best_xgb_params.pop("lags"),
         "lags_past_covariates": best_xgb_params.pop("lags_past_covariates"),
         "output_chunk_length": OUTPUT_CHUNK_LENGTH,
         "add_encoders": None
     }
-    final_model_xgb_native_config_xgb = best_xgb_params.copy() # best_xgb_params now only contains native XGB params
-    final_model_xgb_native_config_xgb.pop("early_stopping_rounds", None) # Remove for final fit on combined data
-    # Optionally adjust n_estimators for the final model
-    # final_model_xgb_native_config_xgb["n_estimators"] = int(best_xgb_params.get("n_estimators", 200) * 1.1)
 
+    # best_xgb_params
+    final_model_xgb_native_config_xgb = best_xgb_params.copy()
+
+    # Remove for final fit on combined data
+    final_model_xgb_native_config_xgb.pop("early_stopping_rounds", None)
+
+    # Add the final model parameters
     final_xgb_model = XGBModel(**final_model_darts_config_xgb, **final_model_xgb_native_config_xgb)
 
     print("Fitting final tuned XGBModel on combined train+val data...")
+
     # Determine if past_covariates should be used for the final fit
     use_past_covs_final_fit = final_train_past_covariates_xgb is not None and \
                               final_model_darts_config_xgb.get('lags_past_covariates') is not None and \
@@ -253,12 +245,11 @@ if __name__ == "__main__":
     final_xgb_model.fit(
         series=final_train_target_xgb,
         past_covariates=final_train_past_covariates_xgb if use_past_covs_final_fit else None
-        # No val_series for this final fit on combined data
     )
     print("Final tuned XGBModel training complete.")
 
     # --- PREDICTION with Final Tuned XGBModel on Test Set ---
-    if len(test_target_ts_for_xgb) > 0:
+    if len(test_target_ts) > 0:
         print("\n--- Making Predictions on Test Set with Final Tuned XGBModel ---")
         try:
             use_past_covs_test_pred = history_all_features_for_test_pred_xgb is not None and \
@@ -266,13 +257,13 @@ if __name__ == "__main__":
                                       final_model_darts_config_xgb['lags_past_covariates'] > 0
             
             xgb_test_predictions = final_xgb_model.predict(
-                n=len(test_target_ts_for_xgb),
+                n=len(test_target_ts),
                 series=history_target_for_test_pred_xgb, # History for target lags
                 past_covariates=history_all_features_for_test_pred_xgb if use_past_covs_test_pred else None # History for covariate lags
             )
 
             xgb_test_pred_continuous = xgb_test_predictions.values(copy=True).flatten()
-            actual_test_vals = test_target_ts_for_xgb.values(copy=True).flatten()
+            actual_test_vals = test_target_ts.values(copy=True).flatten()
 
             min_len_test_eval = min(len(actual_test_vals), len(xgb_test_pred_continuous))
             actual_test_labels_eval = actual_test_vals[:min_len_test_eval]
